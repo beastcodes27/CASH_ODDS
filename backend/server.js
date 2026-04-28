@@ -4,15 +4,61 @@ const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
 const path = require('path');
+
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envLines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+  for (const line of envLines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = trimmedLine.indexOf('=');
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = trimmedLine.slice(0, separatorIndex).trim();
+    let value = trimmedLine.slice(separatorIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const FASTLIPA_API_URL = process.env.FASTLIPA_API_URL || 'https://api.fastlipa.com/api';
+const FASTLIPA_AUTH_TOKEN = process.env.FASTLIPA_AUTH_TOKEN;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+const parseJsonSafely = async (response) => {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return { raw: text };
+  }
+};
 
 // Initialize SQLite Database
 const db = new sqlite3.Database(path.join(__dirname, 'cashodds.db'));
@@ -759,6 +805,85 @@ app.patch('/api/users/profile', authMiddleware, (req, res) => {
 });
 
 // ========== PURCHASES / TIPS HISTORY ROUTES ==========
+
+// Create a FastLipa transaction server-side so the mobile app never exposes the auth token.
+app.post('/api/payments/fastlipa/create-transaction', async (req, res) => {
+  const { number, amount, name } = req.body;
+
+  if (!FASTLIPA_AUTH_TOKEN || FASTLIPA_AUTH_TOKEN === 'your_fastlipa_auth_token_here') {
+    return res.status(500).json({ message: 'FastLipa is not configured on the backend' });
+  }
+
+  if (!number || !amount) {
+    return res.status(400).json({ message: 'Phone number and amount are required' });
+  }
+
+  try {
+    const response = await fetch(`${FASTLIPA_API_URL}/create-transaction`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${FASTLIPA_AUTH_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        number,
+        amount,
+        name: name || 'Connection Client',
+      }),
+    });
+
+    const data = await parseJsonSafely(response);
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        message: data?.message || data?.raw || 'FastLipa transaction creation failed',
+        details: data,
+      });
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(502).json({
+      message: 'Unable to reach FastLipa from the backend',
+      error: error.message,
+    });
+  }
+});
+
+app.get('/api/payments/fastlipa/status/:tranid', async (req, res) => {
+  const { tranid } = req.params;
+
+  if (!FASTLIPA_AUTH_TOKEN || FASTLIPA_AUTH_TOKEN === 'your_fastlipa_auth_token_here') {
+    return res.status(500).json({ message: 'FastLipa is not configured on the backend' });
+  }
+
+  try {
+    const response = await fetch(
+      `${FASTLIPA_API_URL}/status-transaction?tranid=${encodeURIComponent(tranid)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${FASTLIPA_AUTH_TOKEN}`,
+        },
+      }
+    );
+
+    const data = await parseJsonSafely(response);
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        message: data?.message || data?.raw || 'FastLipa status lookup failed',
+        details: data,
+      });
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(502).json({
+      message: 'Unable to reach FastLipa from the backend',
+      error: error.message,
+    });
+  }
+});
 
 // Record a new purchase
 app.post('/api/purchases', authMiddleware, (req, res) => {

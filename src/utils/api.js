@@ -1,8 +1,35 @@
-// API Configuration
-// Change this to your backend URL when deployed
-const API_BASE_URL = 'http://localhost:3000/api';
-// For production, use:
-// const API_BASE_URL = 'https://your-domain.com/api';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+const resolveApiBaseUrl = () => {
+  const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+  if (envUrl) {
+    return envUrl.replace(/\/$/, '');
+  }
+
+  if (Platform.OS === 'web') {
+    return 'http://localhost:3000/api';
+  }
+
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    Constants.expoGoConfig?.debuggerHost ||
+    Constants.manifest2?.extra?.expoGo?.debuggerHost ||
+    Constants.manifest?.debuggerHost;
+  const lanHost = hostUri?.split(':')[0];
+
+  if (lanHost) {
+    return `http://${lanHost}:3000/api`;
+  }
+
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:3000/api';
+  }
+
+  return 'http://localhost:3000/api';
+};
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 // API Endpoints
 export const API_ENDPOINTS = {
@@ -36,6 +63,29 @@ export const API_ENDPOINTS = {
   PURCHASES: `${API_BASE_URL}/purchases`,
   MY_PURCHASES: `${API_BASE_URL}/purchases/my`,
   CHECK_PURCHASE: (tipId) => `${API_BASE_URL}/purchases/check/${tipId}`,
+  FASTLIPA_CREATE_TRANSACTION: `${API_BASE_URL}/payments/fastlipa/create-transaction`,
+  FASTLIPA_STATUS: (tranId) => `${API_BASE_URL}/payments/fastlipa/status/${encodeURIComponent(tranId)}`,
+};
+
+const parseJsonSafely = async (response) => {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Invalid server response (${response.status})`);
+  }
+};
+
+const normalizeFetchError = (error, fallbackMessage) => {
+  if (error instanceof Error && /fetch failed|network request failed/i.test(error.message)) {
+    return new Error(`${fallbackMessage} Make sure the backend server is running and reachable from this device.`);
+  }
+
+  return error;
 };
 
 // Helper function for API calls
@@ -56,17 +106,18 @@ export const apiCall = async (endpoint, options = {}) => {
       ...fetchOptions,
       headers,
     });
-    
-    const data = await response.json();
+
+    const data = await parseJsonSafely(response);
     
     if (!response.ok) {
-      throw new Error(data.message || 'Something went wrong');
+      throw new Error(data?.message || `Request failed with status ${response.status}`);
     }
     
     return data;
   } catch (error) {
-    console.error('API Error:', error);
-    throw error;
+    const normalizedError = normalizeFetchError(error, 'Unable to contact the API.');
+    console.error('API Error:', normalizedError);
+    throw normalizedError;
   }
 };
 
@@ -95,7 +146,7 @@ export const uploadToImgbb = async (imageUri) => {
       },
     });
 
-    const result = await response.json();
+    const result = await parseJsonSafely(response);
     
     if (result.success) {
       return result.data.url;
@@ -103,7 +154,8 @@ export const uploadToImgbb = async (imageUri) => {
       throw new Error(result.error?.message || 'Upload failed');
     }
   } catch (error) {
-    console.error('Imgbb upload error:', error);
-    throw error;
+    const normalizedError = normalizeFetchError(error, 'Image upload failed.');
+    console.error('Imgbb upload error:', normalizedError);
+    throw normalizedError;
   }
 };
