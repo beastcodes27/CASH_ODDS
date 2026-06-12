@@ -49,7 +49,7 @@ class AuthController extends Controller
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
+                'email' => ['Invalid email or password.'],
             ]);
         }
 
@@ -78,8 +78,7 @@ class AuthController extends Controller
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
-            ]);
+                'email' => ['Invalid email or password.'],
         }
 
         if (!$user->isAdmin()) {
@@ -175,11 +174,25 @@ class AuthController extends Controller
             'email' => 'required|string|email',
         ]);
 
-        // TODO: Implement password reset logic
-        // Send email with reset token
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'If that email exists, a password reset link has been sent.',
+            ]);
+        }
+
+        $token = \Illuminate\Support\Str::random(60);
+        \DB::table('password_reset_tokens')->updateOrInsert(
+            ['email' => $request->email],
+            ['email' => $request->email, 'token' => Hash::make($token), 'created_at' => now()]
+        );
+
+        // In production, send email with reset link here
+        // Mail::to($user->email)->send(new ResetPasswordMail($token));
 
         return response()->json([
-            'message' => 'Password reset link sent to your email',
+            'message' => 'If that email exists, a password reset link has been sent.',
         ]);
     }
 

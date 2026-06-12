@@ -5,7 +5,9 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
+import * as SecureStore from 'expo-secure-store';
 import { fastlipa } from './src/utils/fastlipa';
+import { API_ENDPOINTS } from './src/utils/api';
 
 // Stack Navigators
 const ProfileStack = createNativeStackNavigator();
@@ -108,14 +110,6 @@ function LoginScreen({ navigation }) {
             </TouchableOpacity>
           </View>
 
-          {/* Demo Credentials */}
-          <View style={styles.demoCredentials}>
-            <Text style={styles.demoTitle}>Demo Credentials:</Text>
-            <Text style={styles.demoText}>Admin: beast@gmail.com / beast123</Text>
-            <Text style={styles.demoText}>Tipster: tipster@test.com / tipster123</Text>
-            <Text style={styles.demoText}>Verified: verified@test.com / verified123</Text>
-            <Text style={styles.demoText}>User: user@test.com / user123</Text>
-          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -2115,8 +2109,6 @@ function VerificationApplicationScreen({ navigation }) {
   const [uploadingId, setUploadingId] = useState(false);
   const [uploadingSelfie, setUploadingSelfie] = useState(false);
 
-  const IMGBB_API_KEY = '3aa324878a27b8ebaea52aaa9b5aa01d';
-
   const pickImage = async (type) => {
     // For web compatibility, we'll use a simulated upload
     // In production with Expo, you would use ImagePicker from 'expo-image-picker'
@@ -2200,7 +2192,7 @@ function VerificationApplicationScreen({ navigation }) {
       type: 'image/jpeg',
       name: `${type}_${Date.now()}.jpg`,
     });
-    formData.append('key', IMGBB_API_KEY);
+    formData.append('key', process.env.EXPO_PUBLIC_IMGBB_API_KEY || '');
 
     try {
       const response = await fetch('https://api.imgbb.com/1/upload', {
@@ -4204,14 +4196,12 @@ export default function App() {
   );
 
   useEffect(() => {
-    // Check for stored token on app load
     const bootstrapAsync = async () => {
       let userToken = null;
       let userRole = null;
       try {
-        // TODO: Load token and role from SecureStore or AsyncStorage
-        // userToken = await SecureStore.getItemAsync('userToken');
-        // userRole = await SecureStore.getItemAsync('userRole');
+        userToken = await SecureStore.getItemAsync('userToken');
+        userRole = await SecureStore.getItemAsync('userRole');
       } catch (e) {
         console.log('Failed to load token');
       }
@@ -4225,95 +4215,31 @@ export default function App() {
     () => ({
       signIn: async (data) => {
         try {
-          // For testing without backend - mock login
-          // Remove this block when connecting to real API
-          if (data.email === 'beast@gmail.com' && data.password === 'beast123') {
-            const mockUser = {
-              id: 1,
-              name: 'Beast Admin',
-              email: 'beast@gmail.com',
-              role: 'admin',
-              phone: '+255123456789',
-            };
-            const mockToken = 'admin-token-' + Date.now();
-            
-            dispatch({ type: 'SIGN_IN', token: mockToken, role: 'admin', user: mockUser });
-            return { success: true, role: 'admin' };
+          const response = await fetch(API_ENDPOINTS.LOGIN, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+          });
+
+          const result = await response.json();
+
+          if (!response.ok) {
+            throw new Error(result.message || 'Login failed');
           }
-          
-          if (data.email === 'tipster@test.com' && data.password === 'tipster123') {
-            const mockUser = {
-              id: 2,
-              name: 'Pro Tipster',
-              email: 'tipster@test.com',
-              role: 'tipster',
-              phone: '+255987654321',
-              verified: false, // Not verified yet
-            };
-            const mockToken = 'tipster-token-' + Date.now();
-            
-            dispatch({ type: 'SIGN_IN', token: mockToken, role: 'tipster', user: mockUser });
-            return { success: true, role: 'tipster' };
-          }
-          
-          if (data.email === 'verified@test.com' && data.password === 'verified123') {
-            const mockUser = {
-              id: 4,
-              name: 'Verified Expert',
-              email: 'verified@test.com',
-              role: 'tipster',
-              phone: '+255999888777',
-              verified: true, // Verified tipster
-            };
-            const mockToken = 'verified-token-' + Date.now();
-            
-            dispatch({ type: 'SIGN_IN', token: mockToken, role: 'tipster', user: mockUser });
-            return { success: true, role: 'tipster' };
-          }
-          
-          if (data.email === 'user@test.com' && data.password === 'user123') {
-            const mockUser = {
-              id: 3,
-              name: 'John User',
-              email: 'user@test.com',
-              role: 'subscriber',
-              phone: '+255111222333',
-            };
-            const mockToken = 'user-token-' + Date.now();
-            
-            dispatch({ type: 'SIGN_IN', token: mockToken, role: 'subscriber', user: mockUser });
-            return { success: true, role: 'subscriber' };
-          }
-          
-          // Real API call - Uncomment when backend is ready
-          // const API_URL = 'http://YOUR_API_IP:8000/api';
-          // const response = await fetch(`${API_URL}/login`, {
-          //   method: 'POST',
-          //   headers: { 'Content-Type': 'application/json' },
-          //   body: JSON.stringify(data),
-          // });
-          // 
-          // const result = await response.json();
-          // 
-          // if (!response.ok) {
-          //   throw new Error(result.message || 'Login failed');
-          // }
-          // 
-          // const { user, token } = result;
-          // dispatch({ type: 'SIGN_IN', token: token, role: user.role, user: user });
-          // return { success: true, role: user.role };
-          
-          throw new Error('Invalid credentials. Try: beast@gmail.com / beast123 (admin)');
+
+          const { user, token } = result;
+          await SecureStore.setItemAsync('userToken', token);
+          await SecureStore.setItemAsync('userRole', user.role);
+          dispatch({ type: 'SIGN_IN', token: token, role: user.role, user: user });
+          return { success: true, role: user.role };
         } catch (error) {
-          console.error('Login error:', error);
           throw error;
         }
       },
       signOut: async () => {
         try {
-          // TODO: Remove stored token and role
-          // await SecureStore.deleteItemAsync('userToken');
-          // await SecureStore.deleteItemAsync('userRole');
+          await SecureStore.deleteItemAsync('userToken');
+          await SecureStore.deleteItemAsync('userRole');
           dispatch({ type: 'SIGN_OUT' });
         } catch (error) {
           console.error('Logout error:', error);
@@ -4321,50 +4247,30 @@ export default function App() {
       },
       signUp: async (data) => {
         try {
-          // Mock registration - creates a subscriber
-          const mockUser = {
-            id: Date.now(),
-            name: data.name,
-            email: data.email,
-            role: 'subscriber',
-            phone: data.phone,
-          };
-          const mockToken = 'user-token-' + Date.now();
-          
-          // Store token and role securely
-          // await SecureStore.setItemAsync('userToken', token);
-          // await SecureStore.setItemAsync('userRole', user.role);
-          
-          dispatch({ type: 'SIGN_IN', token: mockToken, role: 'subscriber', user: mockUser });
-          
-          return { success: true, role: 'subscriber' };
-          
-          // Real API call - Uncomment when backend is ready
-          // const API_URL = 'http://YOUR_API_IP:8000/api';
-          // const response = await fetch(`${API_URL}/register`, {
-          //   method: 'POST',
-          //   headers: { 'Content-Type': 'application/json' },
-          //   body: JSON.stringify({
-          //     name: data.name,
-          //     email: data.email,
-          //     password: data.password,
-          //     password_confirmation: data.password,
-          //     phone: data.phone,
-          //     role: 'subscriber',
-          //   }),
-          // });
-          // 
-          // const result = await response.json();
-          // 
-          // if (!response.ok) {
-          //   throw new Error(result.message || 'Registration failed');
-          // }
-          // 
-          // const { user, token } = result;
-          // dispatch({ type: 'SIGN_IN', token: token, role: user.role, user: user });
-          // return { success: true, role: user.role };
+          const response = await fetch(API_ENDPOINTS.REGISTER, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: data.name,
+              email: data.email,
+              password: data.password,
+              phone: data.phone,
+              role: 'subscriber',
+            }),
+          });
+
+          const result = await response.json();
+
+          if (!response.ok) {
+            throw new Error(result.message || 'Registration failed');
+          }
+
+          const { user, token } = result;
+          await SecureStore.setItemAsync('userToken', token);
+          await SecureStore.setItemAsync('userRole', user.role);
+          dispatch({ type: 'SIGN_IN', token: token, role: user.role, user: user });
+          return { success: true, role: user.role };
         } catch (error) {
-          console.error('Registration error:', error);
           throw error;
         }
       },

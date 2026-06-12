@@ -80,14 +80,6 @@ const parseJsonSafely = async (response) => {
   }
 };
 
-const normalizeFetchError = (error, fallbackMessage) => {
-  if (error instanceof Error && /fetch failed|network request failed/i.test(error.message)) {
-    return new Error(`${fallbackMessage} Make sure the backend server is running and reachable from this device.`);
-  }
-
-  return error;
-};
-
 // Helper function for API calls
 export const apiCall = async (endpoint, options = {}) => {
   const { token, ...fetchOptions } = options;
@@ -115,20 +107,24 @@ export const apiCall = async (endpoint, options = {}) => {
     
     return data;
   } catch (error) {
-    const normalizedError = normalizeFetchError(error, 'Unable to contact the API.');
-    console.error('API Error:', normalizedError);
-    throw normalizedError;
+    throw error;
   }
 };
 
 // Imgbb Upload Configuration
+// NOTE: Set EXPO_PUBLIC_IMGBB_API_KEY in your environment or .env file
+// DO NOT hardcode this key in source control
 export const IMGBB_CONFIG = {
-  API_KEY: '3aa324878a27b8ebaea52aaa9b5aa01d',
+  API_KEY: process.env.EXPO_PUBLIC_IMGBB_API_KEY || '',
   UPLOAD_URL: 'https://api.imgbb.com/1/upload',
 };
 
 // Upload image to imgbb
 export const uploadToImgbb = async (imageUri) => {
+  if (!IMGBB_CONFIG.API_KEY) {
+    throw new Error('Image upload is not configured');
+  }
+
   const formData = new FormData();
   formData.append('image', {
     uri: imageUri,
@@ -154,8 +150,6 @@ export const uploadToImgbb = async (imageUri) => {
       throw new Error(result.error?.message || 'Upload failed');
     }
   } catch (error) {
-    const normalizedError = normalizeFetchError(error, 'Image upload failed.');
-    console.error('Imgbb upload error:', normalizedError);
-    throw normalizedError;
+    throw error;
   }
 };
