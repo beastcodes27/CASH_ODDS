@@ -1,37 +1,18 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import { DEFAULT_API_BASE_URL, getApiBaseUrl as configGetApiBaseUrl } from '../config/api.config';
 
-const resolveApiBaseUrl = () => {
-  const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
-  if (envUrl) {
-    return envUrl.replace(/\/$/, '');
-  }
-
-  if (Platform.OS === 'web') {
-    return 'http://localhost:3000/api';
-  }
-
-  const hostUri =
-    Constants.expoConfig?.hostUri ||
-    Constants.expoGoConfig?.debuggerHost ||
-    Constants.manifest2?.extra?.expoGo?.debuggerHost ||
-    Constants.manifest?.debuggerHost;
-  const lanHost = hostUri?.split(':')[0];
-
-  if (lanHost) {
-    return `http://${lanHost}:3000/api`;
-  }
-
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:3000/api';
-  }
-
-  return 'http://localhost:3000/api';
+/**
+ * Resolve active API Base URL.
+ * Defaults to production https://cashodds.devtz.com/api
+ */
+export const resolveApiBaseUrl = () => {
+  return configGetApiBaseUrl();
 };
 
 export const API_BASE_URL = resolveApiBaseUrl();
 
-// API Endpoints
+// API Endpoints wired to cashodds.devtz.com backend
 export const API_ENDPOINTS = {
   // Auth
   LOGIN: `${API_BASE_URL}/login`,
@@ -78,7 +59,7 @@ export const API_ENDPOINTS = {
 
 const parseJsonSafely = async (response) => {
   const text = await response.text();
-  if (!text) {
+  if (!text || text.trim() === '') {
     return null;
   }
 
@@ -95,6 +76,7 @@ export const apiCall = async (endpoint, options = {}) => {
   
   const headers = {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
     ...fetchOptions.headers,
   };
   
@@ -111,18 +93,19 @@ export const apiCall = async (endpoint, options = {}) => {
     const data = await parseJsonSafely(response);
     
     if (!response.ok) {
-      throw new Error(data?.message || `Request failed with status ${response.status}`);
+      throw new Error(data?.message || data?.error || `Request failed with status ${response.status}`);
     }
     
     return data;
   } catch (error) {
+    if (error instanceof Error && /network request failed|fetch failed|failed to fetch/i.test(error.message)) {
+      throw new Error('Unable to connect to Cash Odds server at cashodds.devtz.com. Please check your internet connection.');
+    }
     throw error;
   }
 };
 
 // Imgbb Upload Configuration
-// NOTE: Set EXPO_PUBLIC_IMGBB_API_KEY in your environment or .env file
-// DO NOT hardcode this key in source control
 export const IMGBB_CONFIG = {
   API_KEY: process.env.EXPO_PUBLIC_IMGBB_API_KEY || '',
   UPLOAD_URL: 'https://api.imgbb.com/1/upload',
@@ -153,10 +136,10 @@ export const uploadToImgbb = async (imageUri) => {
 
     const result = await parseJsonSafely(response);
     
-    if (result.success) {
+    if (result && result.success) {
       return result.data.url;
     } else {
-      throw new Error(result.error?.message || 'Upload failed');
+      throw new Error(result?.error?.message || 'Upload failed');
     }
   } catch (error) {
     throw error;
