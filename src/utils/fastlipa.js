@@ -2,7 +2,7 @@ import { API_ENDPOINTS } from './api';
 
 const parseJsonSafely = async (response) => {
     const text = await response.text();
-    if (!text) {
+    if (!text || text.trim() === '') {
         return null;
     }
 
@@ -14,20 +14,24 @@ const parseJsonSafely = async (response) => {
 };
 
 const normalizePaymentError = (error) => {
-    if (error instanceof Error && /fetch failed|network request failed/i.test(error.message)) {
-        return new Error('Payment service is unreachable. Make sure the backend server is running and accessible from this device.');
+    if (error instanceof Error && /fetch failed|network request failed|failed to fetch/i.test(error.message)) {
+        return new Error('Payment service is unreachable at cashodds.devtz.com. Make sure the server is accessible.');
     }
 
     return error;
 };
 
 export const fastlipa = {
+    /**
+     * Create FastLipa transaction on backend
+     */
     async createTransaction(number, amount) {
         try {
             const response = await fetch(API_ENDPOINTS.FASTLIPA_CREATE_TRANSACTION, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
                 body: JSON.stringify({
                     number,
@@ -49,9 +53,16 @@ export const fastlipa = {
         }
     },
 
+    /**
+     * Check transaction status on backend
+     */
     async checkStatus(tranID) {
         try {
-            const response = await fetch(API_ENDPOINTS.FASTLIPA_STATUS(tranID));
+            const response = await fetch(API_ENDPOINTS.FASTLIPA_STATUS(tranID), {
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
             const data = await parseJsonSafely(response);
 
             if (!response.ok) {
