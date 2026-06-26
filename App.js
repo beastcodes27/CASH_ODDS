@@ -8,6 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as SecureStore from 'expo-secure-store';
 import { fastlipa } from './src/utils/fastlipa';
 import { API_ENDPOINTS, apiCall, uploadToImgbb } from './src/utils/api';
+import { healthService } from './src/services';
 import { ToastProvider, useToast } from './src/components/Toast';
 import { setToastRef, toast } from './src/utils/toast';
 import { TERMS_OF_SERVICE, PRIVACY_POLICY } from './src/utils/policies';
