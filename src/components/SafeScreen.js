@@ -15,3 +15,5 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
 });
+
+// Connected to Cash Odds backend at cashodds.devtz.com
