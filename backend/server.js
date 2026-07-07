@@ -353,6 +353,20 @@ app.get('/api/tips', (req, res) => {
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
   const offset = (pageNum - 1) * limitNum;
 
+  // Extract auth info if present
+  let currentUserId = null;
+  let currentUserRole = null;
+  const token = req.headers.authorization?.split(' ')[1];
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+      currentUserId = decoded.sub;
+      currentUserRole = decoded.role;
+    } catch (e) {
+      // Ignore invalid token
+    }
+  }
+
   let query = `
     SELECT t.*, u.name as tipster_name, u.verified as tipster_verified,
            (SELECT COUNT(*) FROM booking_codes WHERE tip_id = t.id) as booking_code_count
@@ -387,28 +401,43 @@ app.get('/api/tips', (req, res) => {
       return res.json({ tips: [] });
     }
 
-    const tipIds = tips.map(t => t.id);
-    const placeholders = tipIds.map(() => '?').join(',');
-    db.all(`SELECT * FROM booking_codes WHERE tip_id IN (${placeholders})`, tipIds, (err, codes) => {
-      if (err) {
-        return handleDbError(res, 'Error fetching booking codes', err);
-      }
-
-      const tipsWithCodes = tips.map(tip => {
-        const isAuth = req.headers.authorization;
-        const tipData = {
-          ...tip,
-          is_premium: tip.is_premium === 1,
-          tipster_verified: tip.tipster_verified === 1,
-          booking_code_count: tip.booking_code_count,
-        };
-        if (!tip.is_premium || isAuth) {
-          tipData.booking_codes = codes.filter(c => c.tip_id === tip.id);
-        }
-        return tipData;
+    // Get user purchases if logged in
+    const getPurchasesPromise = new Promise((resolve) => {
+      if (!currentUserId) return resolve([]);
+      db.all('SELECT tip_id FROM purchases WHERE user_id = ?', [currentUserId], (err, rows) => {
+        if (err) return resolve([]);
+        resolve(rows.map(r => r.tip_id));
       });
+    });
 
-      res.json({ tips: tipsWithCodes, page: pageNum, limit: limitNum });
+    getPurchasesPromise.then((purchasedTipIds) => {
+      const tipIds = tips.map(t => t.id);
+      const placeholders = tipIds.map(() => '?').join(',');
+      db.all(`SELECT * FROM booking_codes WHERE tip_id IN (${placeholders})`, tipIds, (err, codes) => {
+        if (err) {
+          return handleDbError(res, 'Error fetching booking codes', err);
+        }
+
+        const tipsWithCodes = tips.map(tip => {
+          const tipData = {
+            ...tip,
+            is_premium: tip.is_premium === 1,
+            tipster_verified: tip.tipster_verified === 1,
+            booking_code_count: tip.booking_code_count,
+          };
+          
+          const isCreator = currentUserId && tip.tipster_id === currentUserId;
+          const isAdmin = currentUserRole === 'admin';
+          const hasPurchased = purchasedTipIds.includes(tip.id);
+
+          if (!tipData.is_premium || isCreator || isAdmin || hasPurchased) {
+            tipData.booking_codes = codes.filter(c => c.tip_id === tip.id);
+          }
+          return tipData;
+        });
+
+        res.json({ tips: tipsWithCodes, page: pageNum, limit: limitNum });
+      });
     });
   });
 });
@@ -418,6 +447,20 @@ app.get('/api/tips/:id', validate([
   param('id').isUUID().withMessage('Invalid tip ID'),
 ]), (req, res) => {
   const { id } = req.params;
+
+  // Extract auth info if present
+  let currentUserId = null;
+  let currentUserRole = null;
+  const token = req.headers.authorization?.split(' ')[1];
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+      currentUserId = decoded.sub;
+      currentUserRole = decoded.role;
+    } catch (e) {
+      // Ignore invalid token
+    }
+  }
 
   db.get(
     `SELECT t.*, u.name as tipster_name, u.verified as tipster_verified
@@ -435,24 +478,35 @@ app.get('/api/tips/:id', validate([
 
       db.run('UPDATE tips SET views = views + 1 WHERE id = ?', [id]);
 
-      const isAuth = !!req.headers.authorization;
+      // Check purchase
+      const checkPurchasePromise = new Promise((resolve) => {
+        if (!currentUserId) return resolve(false);
+        db.get('SELECT id FROM purchases WHERE user_id = ? AND tip_id = ?', [currentUserId, id], (err, row) => {
+          resolve(!!row);
+        });
+      });
 
-      db.all('SELECT * FROM booking_codes WHERE tip_id = ?', [id], (err, codes) => {
-        if (err) {
-          return handleDbError(res, 'Error fetching booking codes', err);
-        }
+      checkPurchasePromise.then((hasPurchased) => {
+        db.all('SELECT * FROM booking_codes WHERE tip_id = ?', [id], (err, codes) => {
+          if (err) {
+            return handleDbError(res, 'Error fetching booking codes', err);
+          }
 
-        const tipData = {
-          ...tip,
-          is_premium: tip.is_premium === 1,
-          tipster_verified: tip.tipster_verified === 1,
-        };
+          const tipData = {
+            ...tip,
+            is_premium: tip.is_premium === 1,
+            tipster_verified: tip.tipster_verified === 1,
+          };
 
-        if (!tipData.is_premium || isAuth) {
-          tipData.booking_codes = codes;
-        }
+          const isCreator = currentUserId && tipData.tipster_id === currentUserId;
+          const isAdmin = currentUserRole === 'admin';
 
-        res.json({ tip: tipData });
+          if (!tipData.is_premium || isCreator || isAdmin || hasPurchased) {
+            tipData.booking_codes = codes;
+          }
+
+          res.json({ tip: tipData });
+        });
       });
     }
   );
@@ -1177,6 +1231,198 @@ app.get('/api/purchases', authMiddleware, (req, res) => {
         return handleDbError(res, 'Error fetching purchases', err);
       }
       res.json({ purchases });
+    }
+  );
+});
+
+// ========== ADDED EXTENSION ROUTES ==========
+
+// Change Password
+app.post('/api/users/change-password', authMiddleware, validate([
+  body('current_password').isLength({ min: 1 }).withMessage('Current password is required'),
+  body('new_password')
+    .isLength({ min: 8, max: 128 }).withMessage('Password must be at least 8 characters')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password must contain uppercase, lowercase, and a number'),
+]), async (req, res) => {
+  const { current_password, new_password } = req.body;
+  const userId = req.user.sub;
+
+  db.get('SELECT password FROM users WHERE id = ?', [userId], async (err, user) => {
+    if (err) return handleDbError(res, 'Database error', err);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    try {
+      const isMatch = await bcrypt.compare(current_password, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ message: 'Incorrect current password' });
+      }
+
+      const hashedPassword = await bcrypt.hash(new_password, BCRYPT_ROUNDS);
+      db.run('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, userId], function(err) {
+        if (err) return handleDbError(res, 'Error updating password', err);
+        res.json({ message: 'Password changed successfully' });
+      });
+    } catch (error) {
+      handleDbError(res, 'Server error', error);
+    }
+  });
+});
+
+// Delete Account
+app.post('/api/users/delete', authMiddleware, validate([
+  body('password').isLength({ min: 1 }).withMessage('Password is required'),
+]), async (req, res) => {
+  const { password } = req.body;
+  const userId = req.user.sub;
+
+  db.get('SELECT password FROM users WHERE id = ?', [userId], async (err, user) => {
+    if (err) return handleDbError(res, 'Database error', err);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    try {
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ message: 'Incorrect password' });
+      }
+
+      db.serialize(() => {
+        db.run('DELETE FROM followers WHERE follower_id = ? OR tipster_id = ?', [userId, userId]);
+        db.run('DELETE FROM notifications WHERE user_id = ?', [userId]);
+        db.run('DELETE FROM verification_requests WHERE user_id = ?', [userId]);
+        db.run('DELETE FROM purchases WHERE user_id = ?', [userId]);
+        db.run('DELETE FROM booking_codes WHERE tip_id IN (SELECT id FROM tips WHERE tipster_id = ?)', [userId]);
+        db.run('DELETE FROM tips WHERE tipster_id = ?', [userId]);
+        db.run('DELETE FROM users WHERE id = ?', [userId], function(err) {
+          if (err) return handleDbError(res, 'Error deleting user', err);
+          res.json({ message: 'Account deleted successfully' });
+        });
+      });
+    } catch (error) {
+      handleDbError(res, 'Server error', error);
+    }
+  });
+});
+
+// Broadcast Notification
+app.post('/api/notifications/broadcast', authMiddleware, validate([
+  body('title').trim().isLength({ min: 1, max: 200 }).withMessage('Title is required'),
+  body('body').trim().isLength({ min: 1, max: 1000 }).withMessage('Body is required'),
+  body('type').optional().isLength({ max: 50 }),
+]), (req, res) => {
+  const { title, body: msgBody, type } = req.body;
+  const id = crypto.randomUUID();
+
+  db.run(
+    'INSERT INTO notifications (id, user_id, title, message, type) VALUES (?, NULL, ?, ?, ?)',
+    [id, title, msgBody, type || 'broadcast'],
+    function(err) {
+      if (err) return handleDbError(res, 'Error broadcasting notification', err);
+      res.status(201).json({ message: 'Notification broadcasted successfully', id });
+    }
+  );
+});
+
+// Get Tipster's My Tips
+app.get('/api/my-tips', authMiddleware, (req, res) => {
+  const { status } = req.query;
+  let query = `
+    SELECT t.*,
+           (SELECT COUNT(*) FROM booking_codes WHERE tip_id = t.id) as booking_code_count
+    FROM tips t
+    WHERE t.tipster_id = ?
+  `;
+  const params = [req.user.sub];
+  if (status && status !== 'all') {
+    query += ' AND t.status = ?';
+    params.push(status);
+  }
+  query += ' ORDER BY t.created_at DESC';
+  db.all(query, params, (err, tips) => {
+    if (err) return handleDbError(res, 'Error fetching my tips', err);
+    if (tips.length === 0) return res.json({ tips: [] });
+    const tipIds = tips.map(t => t.id);
+    const placeholders = tipIds.map(() => '?').join(',');
+    db.all(`SELECT * FROM booking_codes WHERE tip_id IN (${placeholders})`, tipIds, (err, codes) => {
+      if (err) return handleDbError(res, 'Error fetching booking codes', err);
+      const tipsWithCodes = tips.map(tip => ({
+        ...tip,
+        is_premium: tip.is_premium === 1,
+        booking_codes: codes.filter(c => c.tip_id === tip.id)
+      }));
+      res.json({ tips: tipsWithCodes });
+    });
+  });
+});
+
+// Follow a tipster
+app.post('/api/tipsters/:id/follow', authMiddleware, validate([
+  param('id').isUUID().withMessage('Invalid tipster ID'),
+]), (req, res) => {
+  const tipsterId = req.params.id;
+  const followerId = req.user.sub;
+
+  if (tipsterId === followerId) {
+    return res.status(400).json({ message: 'You cannot follow yourself' });
+  }
+
+  db.get('SELECT role FROM users WHERE id = ?', [tipsterId], (err, user) => {
+    if (err) return handleDbError(res, 'Database error', err);
+    if (!user || user.role !== 'tipster') {
+      return res.status(404).json({ message: 'Tipster not found' });
+    }
+
+    const id = crypto.randomUUID();
+    db.run(
+      'INSERT INTO followers (id, follower_id, tipster_id) VALUES (?, ?, ?)',
+      [id, followerId, tipsterId],
+      function(err) {
+        if (err) {
+          if (err.message && err.message.includes('UNIQUE constraint failed')) {
+            return res.status(409).json({ message: 'You are already following this tipster' });
+          }
+          return handleDbError(res, 'Error following tipster', err);
+        }
+
+        // Increment followers_count
+        db.run('UPDATE users SET followers_count = followers_count + 1 WHERE id = ?', [tipsterId]);
+        res.json({ message: 'Successfully followed tipster' });
+      }
+    );
+  });
+});
+
+// Unfollow a tipster
+app.post('/api/tipsters/:id/unfollow', authMiddleware, validate([
+  param('id').isUUID().withMessage('Invalid tipster ID'),
+]), (req, res) => {
+  const tipsterId = req.params.id;
+  const followerId = req.user.sub;
+
+  db.run(
+    'DELETE FROM followers WHERE follower_id = ? AND tipster_id = ?',
+    [followerId, tipsterId],
+    function(err) {
+      if (err) return handleDbError(res, 'Error unfollowing tipster', err);
+      if (this.changes === 0) {
+        return res.status(404).json({ message: 'You were not following this tipster' });
+      }
+
+      // Decrement followers_count
+      db.run('UPDATE users SET followers_count = MAX(0, followers_count - 1) WHERE id = ?', [tipsterId]);
+      res.json({ message: 'Successfully unfollowed tipster' });
+    }
+  );
+});
+
+// Get followed tipster IDs
+app.get('/api/tipsters/my/following', authMiddleware, (req, res) => {
+  db.all(
+    'SELECT tipster_id FROM followers WHERE follower_id = ?',
+    [req.user.sub],
+    (err, rows) => {
+      if (err) return handleDbError(res, 'Error fetching followed tipsters', err);
+      const followingIds = rows.map(r => r.tipster_id);
+      res.json({ following: followingIds });
     }
   );
 });
