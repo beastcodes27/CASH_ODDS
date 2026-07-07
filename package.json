@@ -1,6 +1,6 @@
 {
   "name": "cash_odds",
-  "version": "1.0.0",
+  "version": "5.0.1",
   "main": "index.js",
   "scripts": {
     "start": "expo start",

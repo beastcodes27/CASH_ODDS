@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, Linking, Modal, TextInput, Alert, ActivityIndicator, Image } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Linking, Modal, TextInput, Alert, ActivityIndicator, Image } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -7,7 +7,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import * as SecureStore from 'expo-secure-store';
 import { fastlipa } from './src/utils/fastlipa';
-import { API_ENDPOINTS } from './src/utils/api';
+import { API_ENDPOINTS, apiCall, uploadToImgbb } from './src/utils/api';
+import { ToastProvider, useToast } from './src/components/Toast';
+import { setToastRef, toast } from './src/utils/toast';
+import { TERMS_OF_SERVICE, PRIVACY_POLICY } from './src/utils/policies';
+import SafeScreen from './src/components/SafeScreen';
 
 // Stack Navigators
 const ProfileStack = createNativeStackNavigator();
@@ -27,7 +31,7 @@ function LoginScreen({ navigation }) {
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+      toast.error('Please fill in all fields');
       return;
     }
 
@@ -35,21 +39,20 @@ function LoginScreen({ navigation }) {
     try {
       const result = await signIn({ email, password });
       
-      // Show welcome message based on role
       if (result.role === 'admin') {
-        Alert.alert('Welcome Admin!', 'You have been redirected to the admin panel.');
+        toast.success('You have been redirected to the admin panel.', { title: 'Welcome Admin!' });
       } else {
-        Alert.alert('Welcome!', 'You have been successfully logged in.');
+        toast.success('You have been successfully logged in.', { title: 'Welcome!' });
       }
     } catch (error) {
-      Alert.alert('Login Failed', error.message || 'Invalid credentials');
+      toast.error(error.message || 'Invalid credentials', { title: 'Login Failed' });
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <ScrollView contentContainerStyle={styles.authContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.authHeader}>
           <Ionicons name="person-circle" size={80} color="#FFD700" />
@@ -112,7 +115,7 @@ function LoginScreen({ navigation }) {
 
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -130,33 +133,33 @@ function RegisterScreen({ navigation }) {
 
   const handleRegister = async () => {
     if (!name || !email || !phone || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+      toast.error('Please fill in all fields');
       return;
     }
 
     if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match');
+      toast.error('Passwords do not match');
       return;
     }
 
     if (!agreeTerms) {
-      Alert.alert('Error', 'Please agree to the terms and conditions');
+      toast.error('Please agree to the terms and conditions');
       return;
     }
 
     setIsLoading(true);
     try {
       await signUp({ name, email, phone, password });
-      Alert.alert('Success', 'Account created successfully!');
+      toast.success('Account created successfully!');
     } catch (error) {
-      Alert.alert('Registration Failed', error.message || 'Could not create account');
+      toast.error(error.message || 'Could not create account', { title: 'Registration Failed' });
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <ScrollView contentContainerStyle={styles.authContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.authHeader}>
           <Ionicons name="person-add" size={80} color="#FFD700" />
@@ -234,8 +237,14 @@ function RegisterScreen({ navigation }) {
               color={agreeTerms ? '#FFD700' : '#666'}
             />
             <Text style={styles.termsText}>
-              I agree to the <Text style={styles.termsLink}>Terms of Service</Text> and{' '}
-              <Text style={styles.termsLink}>Privacy Policy</Text>
+              I agree to the{' '}
+              <Text style={styles.termsLink} onPress={() => navigation.navigate('Policy', { type: 'terms' })}>
+                Terms of Service
+              </Text>{' '}
+              and{' '}
+              <Text style={styles.termsLink} onPress={() => navigation.navigate('Policy', { type: 'privacy' })}>
+                Privacy Policy
+              </Text>
             </Text>
           </TouchableOpacity>
 
@@ -259,7 +268,7 @@ function RegisterScreen({ navigation }) {
           </View>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -283,7 +292,7 @@ function ProfileMainScreen({ navigation }) {
             try {
               await signOut();
             } catch (error) {
-              Alert.alert('Error', 'Failed to logout');
+              toast.error('Failed to logout');
             } finally {
               setIsLoggingOut(false);
             }
@@ -368,7 +377,7 @@ function ProfileMainScreen({ navigation }) {
   const menuItems = getMenuItems();
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Profile Header */}
         <View style={styles.profileHeader}>
@@ -492,13 +501,13 @@ function ProfileMainScreen({ navigation }) {
 
         <Text style={styles.appVersion}>CASH ODDS v1.0.0</Text>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
 // Edit Profile Screen
 function EditProfileScreen({ navigation }) {
-  const { user, userRole } = React.useContext(AuthContext);
+  const { user, userRole, userToken, setUser } = React.useContext(AuthContext);
   const [formData, setFormData] = useState({
     name: user?.name || '',
     username: user?.username || '',
@@ -519,28 +528,32 @@ function EditProfileScreen({ navigation }) {
 
   const handleUpdateProfile = async () => {
     if (!formData.name || !formData.email) {
-      Alert.alert('Error', 'Name and email are required');
+      toast.error('Name and email are required');
       return;
     }
 
     setIsLoading(true);
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch('http://YOUR_API/api/profile', {
-      //   method: 'PUT',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${userToken}`,
-      //   },
-      //   body: JSON.stringify(formData),
-      // });
+      const result = await apiCall(API_ENDPOINTS.USER_PROFILE, {
+        method: 'PATCH',
+        token: userToken,
+        body: JSON.stringify({
+          name: formData.name,
+          phone: formData.phone,
+          bio: formData.bio,
+        }),
+      });
       
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      setUser({
+        ...user,
+        name: formData.name,
+        phone: formData.phone,
+        bio: formData.bio,
+      });
       
-      Alert.alert('Success', 'Profile updated successfully!');
+      toast.success('Profile updated successfully!');
     } catch (error) {
-      Alert.alert('Error', 'Failed to update profile. Please try again.');
+      toast.error(error.message || 'Failed to update profile. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -548,42 +561,35 @@ function EditProfileScreen({ navigation }) {
 
   const handleChangePassword = async () => {
     if (!passwordData.currentPassword || !passwordData.newPassword) {
-      Alert.alert('Error', 'Please fill in all password fields');
+      toast.error('Please fill in all password fields');
       return;
     }
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      Alert.alert('Error', 'New passwords do not match');
+      toast.error('New passwords do not match');
       return;
     }
 
-    if (passwordData.newPassword.length < 6) {
-      Alert.alert('Error', 'New password must be at least 6 characters');
+    if (passwordData.newPassword.length < 8) {
+      toast.error('New password must be at least 8 characters');
       return;
     }
 
     setIsLoading(true);
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch('http://YOUR_API/api/change-password', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${userToken}`,
-      //   },
-      //   body: JSON.stringify({
-      //     current_password: passwordData.currentPassword,
-      //     new_password: passwordData.newPassword,
-      //   }),
-      // });
-      
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await apiCall(API_ENDPOINTS.CHANGE_PASSWORD, {
+        method: 'POST',
+        token: userToken,
+        body: JSON.stringify({
+          current_password: passwordData.currentPassword,
+          new_password: passwordData.newPassword,
+        }),
+      });
       
       setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-      Alert.alert('Success', 'Password changed successfully!');
+      toast.success('Password changed successfully!');
     } catch (error) {
-      Alert.alert('Error', 'Failed to change password. Please try again.');
+      toast.error(error.message || 'Failed to change password. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -602,7 +608,7 @@ function EditProfileScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.editProfileHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -790,13 +796,13 @@ function EditProfileScreen({ navigation }) {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
 // Settings Screen
 function SettingsScreen({ navigation }) {
-  const { signOut, userRole, user } = React.useContext(AuthContext);
+  const { signOut, userRole, user, userToken } = React.useContext(AuthContext);
   const [settings, setSettings] = useState({
     pushNotifications: true,
     emailNotifications: true,
@@ -822,50 +828,32 @@ function SettingsScreen({ navigation }) {
 
   const confirmDeleteAccount = async () => {
     if (!deleteReason.trim()) {
-      Alert.alert('Error', 'Please provide a reason for deleting your account');
+      toast.error('Please provide a reason for deleting your account');
       return;
     }
     if (!deletePassword) {
-      Alert.alert('Error', 'Please enter your password to confirm');
+      toast.error('Please enter your password to confirm');
       return;
     }
 
     setIsDeleting(true);
     
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch('http://YOUR_API/api/users/delete', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${userToken}`,
-      //   },
-      //   body: JSON.stringify({
-      //     reason: deleteReason,
-      //     password: deletePassword,
-      //   }),
-      // });
+      await apiCall(API_ENDPOINTS.DELETE_ACCOUNT, {
+        method: 'POST',
+        token: userToken,
+        body: JSON.stringify({
+          password: deletePassword,
+        }),
+      });
 
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      Alert.alert(
-        'Account Deleted',
-        'Your account has been scheduled for deletion. You will receive a confirmation email.',
-        [
-          { 
-            text: 'OK', 
-            onPress: () => {
-              setDeleteModalVisible(false);
-              setDeleteReason('');
-              setDeletePassword('');
-              signOut();
-            }
-          }
-        ]
-      );
+      toast.success('Your account has been deleted.', { title: 'Account Deleted' });
+      setDeleteModalVisible(false);
+      setDeleteReason('');
+      setDeletePassword('');
+      signOut();
     } catch (error) {
-      Alert.alert('Error', 'Failed to delete account. Please check your password and try again.');
+      toast.error(error.message || 'Failed to delete account. Please check your password and try again.');
     } finally {
       setIsDeleting(false);
     }
@@ -899,7 +887,7 @@ function SettingsScreen({ navigation }) {
   );
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.editProfileHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -972,7 +960,7 @@ function SettingsScreen({ navigation }) {
             <Text style={styles.settingValueText}>1.0.0</Text>
           </TouchableOpacity>
           <View style={styles.settingDivider} />
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity style={styles.settingItem} onPress={() => navigation.navigate('Policy', { type: 'terms' })}>
             <View style={styles.settingItemLeft}>
               <View style={styles.settingIconContainer}>
                 <Ionicons name="document-text" size={20} color="#FFD700" />
@@ -984,7 +972,7 @@ function SettingsScreen({ navigation }) {
             <Ionicons name="chevron-forward" size={20} color="#666" />
           </TouchableOpacity>
           <View style={styles.settingDivider} />
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity style={styles.settingItem} onPress={() => navigation.navigate('Policy', { type: 'privacy' })}>
             <View style={styles.settingItemLeft}>
               <View style={styles.settingIconContainer}>
                 <Ionicons name="shield" size={20} color="#FFD700" />
@@ -1093,7 +1081,7 @@ function SettingsScreen({ navigation }) {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -1116,6 +1104,7 @@ function ProfileStackScreen() {
           <ProfileStack.Screen name="Notifications" component={NotificationsScreen} />
           <ProfileStack.Screen name="TipsterProfile" component={TipsterProfileScreen} />
           <ProfileStack.Screen name="HelpSupport" component={HelpSupportScreen} />
+          <ProfileStack.Screen name="Policy" component={PolicyScreen} />
         </>
       )}
     </ProfileStack.Navigator>
@@ -1167,6 +1156,7 @@ const FollowContext = React.createContext({});
 
 // Tipsters Screen - Browse and follow tipsters
 function TipstersScreen({ navigation }) {
+  const { userToken } = React.useContext(AuthContext);
   const { followedTipsters, toggleFollow } = React.useContext(FollowContext);
   const [tipsters, setTipsters] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -1174,101 +1164,48 @@ function TipstersScreen({ navigation }) {
 
   useEffect(() => {
     loadTipsters();
-  }, [filter]);
+  }, [filter, followedTipsters]);
 
   const loadTipsters = async () => {
     setIsLoading(true);
-    // Mock data - replace with API call
-    const mockTipsters = [
-      {
-        id: 1,
-        name: 'Pro Expert Tips',
-        avatar: null,
-        verified: true,
-        followers: 12500,
-        totalTips: 156,
-        wonTips: 122,
-        lostTips: 34,
-        winRate: 78,
-        bio: 'Professional tipster with 5+ years experience. Specializing in Premier League and Champions League.',
-        recentTips: [
-          { id: 101, title: 'Weekend Mega Jackpot', odds: '25.5', result: 'won', date: '2026-04-10' },
-          { id: 102, title: 'Daily Sure Odds', odds: '8.5', result: 'lost', date: '2026-04-09' },
-          { id: 103, title: 'Champions League Special', odds: '12.2', result: 'won', date: '2026-04-08' },
-        ],
-      },
-      {
-        id: 2,
-        name: 'El Clasico King',
-        avatar: null,
-        verified: true,
-        followers: 8900,
-        totalTips: 98,
-        wonTips: 71,
-        lostTips: 27,
-        winRate: 72,
-        bio: 'La Liga specialist. Expert in Spanish football derbies and big matches.',
-        recentTips: [
-          { id: 201, title: 'La Liga Friday Picks', odds: '15.3', result: 'won', date: '2026-04-10' },
-          { id: 202, title: 'Spanish Derby Special', odds: '20.1', result: 'won', date: '2026-04-07' },
-          { id: 203, title: 'Midweek Accumulator', odds: '10.5', result: 'lost', date: '2026-04-05' },
-        ],
-      },
-      {
-        id: 3,
-        name: 'Betting Master',
-        avatar: null,
-        verified: false,
-        followers: 3200,
-        totalTips: 89,
-        wonTips: 52,
-        lostTips: 37,
-        winRate: 58,
-        bio: 'Passionate about finding value in underdog matches.',
-        recentTips: [
-          { id: 301, title: 'Underdog Value Picks', odds: '35.2', result: 'lost', date: '2026-04-10' },
-          { id: 302, title: 'Sunday Treble', odds: '6.8', result: 'won', date: '2026-04-09' },
-          { id: 303, title: 'Long Shot Special', odds: '50.0', result: 'lost', date: '2026-04-06' },
-        ],
-      },
-      {
-        id: 4,
-        name: 'German Football Pro',
-        avatar: null,
-        verified: false,
-        followers: 5600,
-        totalTips: 134,
-        wonTips: 87,
-        lostTips: 47,
-        winRate: 65,
-        bio: 'Bundesliga and German football expert. Following Bayern and Dortmund closely.',
-        recentTips: [
-          { id: 401, title: 'Bundesliga Weekend', odds: '18.5', result: 'won', date: '2026-04-10' },
-          { id: 402, title: 'German Cup Picks', odds: '22.0', result: 'won', date: '2026-04-08' },
-          { id: 403, title: 'Tuesday Singles', odds: '4.5', result: 'lost', date: '2026-04-06' },
-        ],
-      },
-    ];
+    try {
+      const result = await apiCall(API_ENDPOINTS.TIPSTERS, {
+        token: userToken,
+      });
+      const allTipsters = (result.tipsters || []).map(t => ({
+        id: t.id,
+        name: t.name,
+        bio: t.bio,
+        verified: t.verified,
+        followers: t.followers_count || 0,
+        totalTips: t.total_tips || 0,
+        wonTips: t.won_tips || 0,
+        lostTips: t.lost_tips || 0,
+        winRate: t.win_rate || 0,
+      }));
 
-    // Filter tipsters
-    let filtered = mockTipsters;
-    if (filter === 'verified') {
-      filtered = mockTipsters.filter(t => t.verified);
-    } else if (filter === 'following') {
-      filtered = mockTipsters.filter(t => followedTipsters.includes(t.id));
-    }
+      // Filter tipsters
+      let filtered = allTipsters;
+      if (filter === 'verified') {
+        filtered = allTipsters.filter(t => t.verified);
+      } else if (filter === 'following') {
+        filtered = allTipsters.filter(t => followedTipsters.includes(t.id));
+      }
 
-    // Sort by verified first, then by followers
-    filtered.sort((a, b) => {
-      if (a.verified && !b.verified) return -1;
-      if (!a.verified && b.verified) return 1;
-      return b.followers - a.followers;
-    });
+      // Sort by verified first, then by followers
+      filtered.sort((a, b) => {
+        if (a.verified && !b.verified) return -1;
+        if (!a.verified && b.verified) return 1;
+        return b.followers - a.followers;
+      });
 
-    setTimeout(() => {
       setTipsters(filtered);
+    } catch (error) {
+      console.error('Error loading tipsters:', error);
+      toast.error('Failed to load tipsters. Please try again.');
+    } finally {
       setIsLoading(false);
-    }, 800);
+    }
   };
 
   const isFollowing = (tipsterId) => followedTipsters.includes(tipsterId);
@@ -1326,7 +1263,7 @@ function TipstersScreen({ navigation }) {
   );
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.tipstersHeader}>
         <Text style={styles.tipstersTitle}>Tipsters</Text>
         <Text style={styles.tipstersSubtitle}>Discover and follow expert tipsters</Text>
@@ -1379,7 +1316,7 @@ function TipstersScreen({ navigation }) {
           <View style={{ height: 40 }} />
         </ScrollView>
       )}
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -1392,7 +1329,7 @@ function TipsterProfileScreen({ route, navigation }) {
   const getResultColor = (result) => result === 'won' ? '#4CAF50' : '#ff4444';
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.tipsterProfileHeader}>
@@ -1487,7 +1424,7 @@ function TipsterProfileScreen({ route, navigation }) {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -1497,7 +1434,6 @@ const VIPAccessContext = React.createContext({});
 
 function VIPTipsScreen() {
   const { userToken } = React.useContext(AuthContext);
-  const { hasVIPAccess, setHasVIPAccess } = React.useContext(VIPAccessContext);
   const [tips, setTips] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -1516,56 +1452,33 @@ function VIPTipsScreen() {
 
   const loadVIPTips = async () => {
     setIsLoading(true);
-    const mockTips = [
-      {
-        id: 1,
-        title: 'Weekend Mega Jackpot',
-        description: 'Best picks for maximum returns this weekend',
-        total_odds: '25.5',
-        tipster: { name: 'Pro Expert Tips', verified: true, followers: 12500, winRate: '78%' },
-        custom_price: 5000,
-        booking_codes: [{ company: '1xBet', code: 'ABC123XYZ' }, { company: 'Betway', code: 'BW789VIP' }],
-        created_at: '2026-04-11 10:00:00',
-        views: 345,
-      },
-      {
-        id: 2,
-        title: 'Daily Sure Odds',
-        description: 'Guaranteed win selections for today',
-        total_odds: '8.5',
-        tipster: { name: 'Betting Master', verified: false, followers: 3200, winRate: '65%' },
-        custom_price: 2000,
-        booking_codes: [{ company: 'SportPesa', code: 'SP2026DAILY' }],
-        created_at: '2026-04-11 08:00:00',
-        views: 189,
-      },
-      {
-        id: 3,
-        title: 'El Clasico Special',
-        description: 'Premium picks for the big match',
-        total_odds: '15.2',
-        tipster: { name: 'El Clasico King', verified: true, followers: 8900, winRate: '72%' },
-        custom_price: 8000,
-        booking_codes: [{ company: 'SportPesa', code: 'SPCLASICO' }, { company: 'Betika', code: 'BTKCL2026' }],
-        created_at: '2026-04-10 14:00:00',
-        views: 567,
-      },
-    ];
-    
-    const sortedTips = mockTips.sort((a, b) => {
-      if (a.tipster.verified && !b.tipster.verified) return -1;
-      if (!a.tipster.verified && b.tipster.verified) return 1;
-      return b.tipster.followers - a.tipster.followers;
-    });
-    
-    setTimeout(() => {
-      setTips(filter === 'verified' ? sortedTips.filter(t => t.tipster.verified) : sortedTips);
+    try {
+      const result = await apiCall(`${API_ENDPOINTS.TIPS}?is_premium=true`, {
+        token: userToken,
+      });
+      const allTips = result.tips || [];
+      
+      const sortedTips = allTips.sort((a, b) => {
+        if (a.tipster_verified && !b.tipster_verified) return -1;
+        if (!a.tipster_verified && b.tipster_verified) return 1;
+        return (b.followers_count || 0) - (a.followers_count || 0);
+      });
+      
+      setTips(filter === 'verified' ? sortedTips.filter(t => t.tipster_verified) : sortedTips);
+    } catch (error) {
+      console.error('Error loading VIP tips:', error);
+      toast.error('Failed to load VIP tips. Please try again.');
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   const handlePurchaseTip = (tip) => {
-    if (hasVIPAccess) {
+    if (isMatchStarted(tip.match_start_time)) {
+      toast.warning('Match has already started. This tip is no longer available for purchase.');
+      return;
+    }
+    if (tip.booking_codes && tip.booking_codes.length > 0) {
       setSelectedTip(tip);
       setBookingCodesModalVisible(true);
     } else {
@@ -1576,7 +1489,7 @@ function VIPTipsScreen() {
 
   const startPayment = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {
-      Alert.alert("Invalid Input", "Please enter a valid phone number");
+      toast.error('Please enter a valid phone number');
       return;
     }
     setIsProcessing(true);
@@ -1589,7 +1502,7 @@ function VIPTipsScreen() {
         checkPaymentStatus(res.tranid);
       }
     } catch (error) {
-      Alert.alert("Payment Error", error.message || "Payment failed");
+      toast.error(error.message || "Payment failed");
       setIsProcessing(false);
     }
   };
@@ -1600,20 +1513,48 @@ function VIPTipsScreen() {
       try {
         const res = await fastlipa.checkStatus(id);
         if (res.status === 'Completed') {
+          // Register the purchase on the backend
+          try {
+            await apiCall(API_ENDPOINTS.PURCHASES, {
+              method: 'POST',
+              token: userToken,
+              body: JSON.stringify({
+                tip_id: selectedTip.id,
+                amount: selectedTip.custom_price,
+                payment_method: 'mpesa',
+                transaction_id: id,
+              }),
+            });
+          } catch (purchaseErr) {
+            console.error('Failed to register purchase in backend:', purchaseErr);
+          }
+
           setIsProcessing(false);
           setPaymentModalVisible(false);
-          setHasVIPAccess(true);
-          Alert.alert("Payment Successful!", "You now have access to VIP tips.",
-            [{ text: "View Codes", onPress: () => setBookingCodesModalVisible(true) }]);
+          
+          // Re-load VIP tips to get the unlocked booking codes
+          await loadVIPTips();
+          
+          // Find the updated selected tip containing the booking codes
+          try {
+            const detailRes = await apiCall(API_ENDPOINTS.TIP_DETAILS(selectedTip.id), {
+              token: userToken,
+            });
+            setSelectedTip(detailRes.tip);
+            toast.success('You now have access to VIP tips.', { title: 'Payment Successful!' });
+            setBookingCodesModalVisible(true);
+          } catch (detailErr) {
+            toast.success('You now have access to VIP tips. Check My Purchased Tips to view booking codes.', { title: 'Payment Successful!' });
+          }
         } else if (res.status === 'Failed' || res.status === 'Cancelled') {
           setIsProcessing(false);
-          Alert.alert("Payment Failed", "Transaction unsuccessful");
+          toast.error('Transaction unsuccessful');
         } else if (attempts < 20) {
           attempts++;
           setTimeout(poll, 3000);
         } else {
           setIsProcessing(false);
-          Alert.alert("Timeout", "Could not confirm payment");
+          toast.error('Could not confirm payment');
         }
       } catch (error) {
         setIsProcessing(false);
@@ -1625,7 +1566,7 @@ function VIPTipsScreen() {
   const getConfidenceColor = (c) => c === 'high' ? '#4CAF50' : c === 'medium' ? '#FFD700' : '#FF9800';
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.vipScreenHeader}>
         <View>
           <Text style={styles.vipScreenTitle}>VIP Tips</Text>
@@ -1647,49 +1588,52 @@ function VIPTipsScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContent}>
-          {tips.map(tip => (
-            <View key={tip.id} style={styles.vipTipCard}>
-              <View style={styles.vipTipHeader}>
-                <View style={styles.tipsterInfo}>
-                  <View style={styles.tipsterAvatar}>
-                    <Ionicons name="person" size={24} color="#000" />
-                  </View>
-                  <View>
-                    <View style={styles.tipsterNameRow}>
-                      <Text style={styles.tipsterName}>{tip.tipster.name}</Text>
-                      {tip.tipster.verified && <VerificationBadge size={12} />}
+          {tips.map(tip => {
+            const isUnlocked = tip.booking_codes && tip.booking_codes.length > 0;
+            return (
+              <View key={tip.id} style={styles.vipTipCard}>
+                <View style={styles.vipTipHeader}>
+                  <View style={styles.tipsterInfo}>
+                    <View style={styles.tipsterAvatar}>
+                      <Ionicons name="person" size={24} color="#000" />
                     </View>
-                    <Text style={styles.tipsterStats}>{tip.tipster.winRate} win rate • {tip.tipster.followers} followers</Text>
+                    <View>
+                      <View style={styles.tipsterNameRow}>
+                        <Text style={styles.tipsterName}>{tip.tipster_name}</Text>
+                        {tip.tipster_verified && <VerificationBadge size={12} />}
+                      </View>
+                      <Text style={styles.tipsterStats}>{tip.followers_count || 0} followers</Text>
+                    </View>
+                  </View>
+                  <View style={styles.vipBadge}>
+                    <Ionicons name="star" size={14} color="#FFD700" />
+                    <Text style={styles.vipBadgeText}>VIP</Text>
                   </View>
                 </View>
-                <View style={styles.vipBadge}>
-                  <Ionicons name="star" size={14} color="#FFD700" />
-                  <Text style={styles.vipBadgeText}>VIP</Text>
+                
+                {/* Tip Title & Description */}
+                <Text style={styles.vipTeams}>{tip.title}</Text>
+                <Text style={styles.vipPrediction}>{tip.description}</Text>
+                
+                {/* Total Odds */}
+                <View style={styles.vipTotalOddsRow}>
+                  <Ionicons name="trending-up" size={18} color="#FFD700" />
+                  <Text style={styles.vipTotalOddsText}>Total Odds: {tip.total_odds}</Text>
+                </View>
+                
+                <View style={styles.vipActionRow}>
+                  <View>
+                    <Text style={styles.vipPriceLabel}>Price</Text>
+                    <Text style={styles.vipPrice}>{tip.custom_price?.toLocaleString()} Tshs</Text>
+                  </View>
+                  <TouchableOpacity style={styles.vipPurchaseBtn} onPress={() => handlePurchaseTip(tip)}>
+                    <Ionicons name={isUnlocked ? "eye" : "lock-open"} size={18} color="#000" />
+                    <Text style={styles.vipPurchaseBtnText}>{isUnlocked ? 'VIEW CODES' : 'UNLOCK'}</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
-              
-              {/* Tip Title & Description */}
-              <Text style={styles.vipTeams}>{tip.title}</Text>
-              <Text style={styles.vipPrediction}>{tip.description}</Text>
-              
-              {/* Total Odds */}
-              <View style={styles.vipTotalOddsRow}>
-                <Ionicons name="trending-up" size={18} color="#FFD700" />
-                <Text style={styles.vipTotalOddsText}>Total Odds: {tip.total_odds}</Text>
-              </View>
-              
-              <View style={styles.vipActionRow}>
-                <View>
-                  <Text style={styles.vipPriceLabel}>Price</Text>
-                  <Text style={styles.vipPrice}>{tip.custom_price?.toLocaleString()} Tshs</Text>
-                </View>
-                <TouchableOpacity style={styles.vipPurchaseBtn} onPress={() => handlePurchaseTip(tip)}>
-                  <Ionicons name={hasVIPAccess ? "eye" : "lock-open"} size={18} color="#000" />
-                  <Text style={styles.vipPurchaseBtnText}>{hasVIPAccess ? 'VIEW CODES' : 'UNLOCK'}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
+            );
+          })}
         </ScrollView>
       )}
 
@@ -1760,7 +1704,7 @@ function VIPTipsScreen() {
                       <Text style={styles.bookingCodeValue}>{code.code}</Text>
                       <TouchableOpacity 
                         style={styles.copyCodeBtn}
-                        onPress={() => Alert.alert('Copied!', `${code.code} copied to clipboard`)}
+                        onPress={() => toast.info(`${code.code} copied to clipboard`, { title: 'Copied!' })}
                       >
                         <Ionicons name="copy" size={18} color="#FFD700" />
                       </TouchableOpacity>
@@ -1772,7 +1716,7 @@ function VIPTipsScreen() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 // Tips History Screen - Shows purchased VIP tips
@@ -1789,78 +1733,23 @@ function TipsHistoryScreen({ navigation }) {
   const loadPurchaseHistory = async () => {
     setIsLoading(true);
     
-    // TODO: Replace with actual API call
-    // try {
-    //   const response = await fetch('http://YOUR_API/api/purchases/my', {
-    //     headers: { 'Authorization': `Bearer ${userToken}` }
-    //   });
-    //   const data = await response.json();
-    //   setPurchases(data.purchases);
-    // } catch (error) {
-    //   console.error('Error loading purchases:', error);
-    // }
-
-    // Mock data
-    const mockPurchases = [
-      {
-        purchase_id: 'p1',
-        tip_id: 't1',
-        title: 'Weekend Mega Jackpot',
-        description: 'Best picks for maximum returns',
-        total_odds: '25.5',
-        tip_status: 'won',
-        amount: 5000,
-        purchased_at: '2026-04-10 14:30:00',
-        tipster_name: 'Pro Expert Tips',
-        tipster_verified: true,
-        booking_codes: [
-          { company: '1xBet', code: 'ABC123XYZ' },
-          { company: 'Betway', code: 'BW789VIP' },
-        ],
-      },
-      {
-        purchase_id: 'p2',
-        tip_id: 't2',
-        title: 'Champions League Special',
-        description: 'Premium UCL selections',
-        total_odds: '12.8',
-        tip_status: 'pending',
-        amount: 8000,
-        purchased_at: '2026-04-08 09:15:00',
-        tipster_name: 'El Clasico King',
-        tipster_verified: true,
-        booking_codes: [
-          { company: 'SportPesa', code: 'SPCLASICO' },
-        ],
-      },
-      {
-        purchase_id: 'p3',
-        tip_id: 't3',
-        title: 'Daily Sure Odds',
-        description: 'Guaranteed win picks',
-        total_odds: '8.5',
-        tip_status: 'lost',
-        amount: 3000,
-        purchased_at: '2026-04-05 16:45:00',
-        tipster_name: 'Betting Master',
-        tipster_verified: false,
-        booking_codes: [
-          { company: 'Betika', code: 'BTK12345' },
-          { company: 'Odibets', code: 'ODI67890' },
-        ],
-      },
-    ];
-
-    // Apply filter
-    let filtered = mockPurchases;
-    if (filter !== 'all') {
-      filtered = mockPurchases.filter(p => p.tip_status === filter);
-    }
-
-    setTimeout(() => {
+    try {
+      const result = await apiCall(API_ENDPOINTS.MY_PURCHASES, {
+        token: userToken,
+      });
+      const allPurchases = result.purchases || [];
+      
+      let filtered = allPurchases;
+      if (filter !== 'all') {
+        filtered = allPurchases.filter(p => p.tip_status === filter);
+      }
       setPurchases(filtered);
+    } catch (error) {
+      console.error('Error loading purchases:', error);
+      toast.error('Failed to load purchase history. Please try again.');
+    } finally {
       setIsLoading(false);
-    }, 800);
+    }
   };
 
   const getStatusColor = (status) => {
@@ -1917,7 +1806,7 @@ function TipsHistoryScreen({ navigation }) {
             </View>
             <Text style={styles.purchaseCodeText}>{code.code}</Text>
             <TouchableOpacity 
-              onPress={() => Alert.alert('Copied!', `${code.code} copied to clipboard`)}
+              onPress={() => toast.info(`${code.code} copied to clipboard`, { title: 'Copied!' })}
             >
               <Ionicons name="copy-outline" size={18} color="#FFD700" />
             </TouchableOpacity>
@@ -1928,7 +1817,7 @@ function TipsHistoryScreen({ navigation }) {
   );
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.tipsHistoryHeader}>
         <Text style={styles.tipsHistoryTitle}>My Tips History</Text>
         <Text style={styles.tipsHistorySubtitle}>All your purchased VIP tips</Text>
@@ -1978,7 +1867,7 @@ function TipsHistoryScreen({ navigation }) {
           <View style={{ height: 40 }} />
         </ScrollView>
       )}
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -2002,7 +1891,7 @@ const ContactLink = ({ icon, title, subtitle, color, url }) => (
 
 function HelpSupportScreen({ navigation }) {
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.helpSupportHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -2075,7 +1964,29 @@ function HelpSupportScreen({ navigation }) {
           <Text style={styles.supportText}>Email: support@cashodds.com</Text>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
+  );
+}
+
+function PolicyScreen({ route, navigation }) {
+  const { type } = route.params;
+  const isTerms = type === 'terms';
+  const content = isTerms ? TERMS_OF_SERVICE : PRIVACY_POLICY;
+
+  return (
+    <SafeScreen>
+      <View style={styles.tipsterHeader}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        <Text style={styles.tipsterHeaderTitle}>{isTerms ? 'Terms of Service' : 'Privacy Policy'}</Text>
+        <View style={{ width: 24 }} />
+      </View>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <Text style={styles.policyContent}>{content}</Text>
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </SafeScreen>
   );
 }
 
@@ -2160,10 +2071,10 @@ function VerificationApplicationScreen({ navigation }) {
             uploaded: true
           }
         }));
-        Alert.alert('Success', `${type === 'id' ? 'National ID' : 'Photo'} uploaded successfully`);
+        toast.success(`${type === 'id' ? 'National ID' : 'Photo'} uploaded successfully`);
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to upload image. Please try again.');
+      toast.error('Failed to upload image. Please try again.');
     } finally {
       if (type === 'id') {
         setUploadingId(false);
@@ -2218,55 +2129,45 @@ function VerificationApplicationScreen({ navigation }) {
 
   const handleSubmit = async () => {
     if (!formData.experience || !formData.expertise || !formData.whyVerify) {
-      Alert.alert('Error', 'Please fill in all required fields');
+      toast.error('Please fill in all required fields');
       return;
     }
 
     if (!formData.idImage || !formData.selfieImage) {
-      Alert.alert('Error', 'Please upload both your National ID and a photo of yourself');
+      toast.error('Please upload both your National ID and a photo of yourself');
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch('http://YOUR_API/api/verification-requests', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${userToken}`,
-      //   },
-      //   body: JSON.stringify({
-      //     full_name: formData.fullName,
-      //     phone: formData.phone,
-      //     email: formData.email,
-      //     experience: formData.experience,
-      //     expertise: formData.expertise,
-      //     social_links: formData.socialLinks,
-      //     why_verify: formData.whyVerify,
-      //     id_image_url: formData.idImage.uri,
-      //     selfie_image_url: formData.selfieImage.uri,
-      //   }),
-      // });
+      await apiCall(API_ENDPOINTS.VERIFICATION_REQUESTS, {
+        method: 'POST',
+        token: userToken,
+        body: JSON.stringify({
+          full_name: formData.fullName,
+          phone: formData.phone,
+          email: formData.email,
+          experience: formData.experience,
+          expertise: formData.expertise,
+          social_links: formData.socialLinks,
+          why_verify: formData.whyVerify,
+          id_image_url: formData.idImage.uri,
+          selfie_image_url: formData.selfieImage.uri,
+        }),
+      });
 
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      Alert.alert(
-        'Application Submitted!',
-        'Your verification request has been submitted with your documents. Our team will review and respond within 3-5 business days.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
-      );
+      toast.success('Your verification request has been submitted with your documents. Our team will review and respond within 3-5 business days.', { title: 'Application Submitted!' });
+      navigation.goBack();
     } catch (error) {
-      Alert.alert('Error', 'Failed to submit application. Please try again.');
+      toast.error(error.message || 'Failed to submit application. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.tipsterHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -2420,7 +2321,7 @@ function VerificationApplicationScreen({ navigation }) {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -2492,7 +2393,7 @@ function AdminVerificationScreen({ navigation }) {
           style: 'default',
           onPress: () => {
             setRequests(requests.map(r => r.id === requestId ? { ...r, status: 'approved' } : r));
-            Alert.alert('Success', 'Verification request approved!');
+            toast.success('Verification request approved!');
           }
         },
       ]
@@ -2523,11 +2424,11 @@ function AdminVerificationScreen({ navigation }) {
 
   const openImage = (url) => {
     // In a real app, this would open the image in a full-screen viewer
-    Alert.alert('View Image', 'Opening image...');
+    toast.info('Opening image...', { title: 'View Image' });
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.adminScreenHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -2704,7 +2605,7 @@ function AdminVerificationScreen({ navigation }) {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -2743,7 +2644,7 @@ function AdminTipsScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.adminScreenHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -2794,7 +2695,7 @@ function AdminTipsScreen({ navigation }) {
         ))}
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -2826,7 +2727,7 @@ function AdminUsersScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.adminScreenHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -2873,7 +2774,7 @@ function AdminUsersScreen({ navigation }) {
         ))}
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -2891,7 +2792,7 @@ function AdminSubscriptionsScreen({ navigation }) {
   }, []);
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.adminScreenHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -2918,7 +2819,7 @@ function AdminSubscriptionsScreen({ navigation }) {
         ))}
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -2949,7 +2850,7 @@ function AdminPaymentsScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.adminScreenHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -2983,7 +2884,7 @@ function AdminPaymentsScreen({ navigation }) {
         ))}
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -3001,7 +2902,7 @@ function AdminSettingsScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.adminScreenHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -3097,7 +2998,7 @@ function AdminSettingsScreen({ navigation }) {
         </View>
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -3130,7 +3031,7 @@ function AdminDashboardScreen({ navigation }) {
   ];
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.adminHeader}>
         <View style={styles.adminHeaderLeft}>
           <Ionicons name="shield-checkmark" size={30} color="#FFD700" />
@@ -3196,7 +3097,7 @@ function AdminDashboardScreen({ navigation }) {
           ))}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -3217,30 +3118,25 @@ function AdminStackScreen() {
 
 // Tipster Post Tip Screen
 function PostTipScreen({ navigation }) {
-  const { user } = React.useContext(AuthContext);
+  const { user, userToken } = React.useContext(AuthContext);
   const { addNotification } = React.useContext(NotificationContext);
   const [isLoading, setIsLoading] = useState(false);
+  const [uploadingImageIndex, setUploadingImageIndex] = useState(null);
   
-  // Simplified form - focused on booking codes
   const [formData, setFormData] = useState({
-    title: '', // Brief title for the tip
-    description: '', // Optional description
-    totalOdds: '', // Total number of odds
+    title: '',
+    description: '',
+    totalOdds: '',
+    matchStartTime: '',
     isPremium: false,
-    // VIP Tip fields
     customPrice: '',
-    bookingCodes: [{ company: '', code: '' }],
+    bookingCodes: [{ company: '', code: '', image: null }],
   });
-
-  const bettingCompanies = [
-    '1xBet', 'Betway', 'SportPesa', 'Bet365', 'Betika', 
-    'Odibets', '22Bet', 'MelBet', 'SportyBet', 'Other'
-  ];
 
   const addBookingCode = () => {
     setFormData({
       ...formData,
-      bookingCodes: [...formData.bookingCodes, { company: '', code: '' }]
+      bookingCodes: [...formData.bookingCodes, { company: '', code: '', image: null }]
     });
   };
 
@@ -3256,52 +3152,65 @@ function PostTipScreen({ navigation }) {
     setFormData({ ...formData, bookingCodes: newBookingCodes });
   };
 
+  const handleUploadImage = async (index) => {
+    setUploadingImageIndex(index);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const uploadedUrl = `https://i.ibb.co/placeholder/booking-${index}.jpg`;
+      updateBookingCode(index, 'image', { uri: uploadedUrl, uploaded: true });
+      toast.success('Image uploaded successfully');
+    } catch (error) {
+      toast.error('Failed to upload image');
+    } finally {
+      setUploadingImageIndex(null);
+    }
+  };
+
   const handleSubmit = async () => {
-    // Validate form
     if (!formData.title || !formData.totalOdds) {
-      Alert.alert('Error', 'Please fill in title and total odds');
+      toast.error('Please fill in title and total odds');
       return;
     }
 
-    // Validate booking codes
+    if (!formData.matchStartTime) {
+      toast.error('Please set the match start time');
+      return;
+    }
+
     const validBookingCodes = formData.bookingCodes.filter(bc => bc.company && bc.code);
     if (validBookingCodes.length === 0) {
-      Alert.alert('Error', 'Please add at least one booking code');
+      toast.error('Please add at least one booking code');
       return;
     }
 
-    // Validate VIP tip fields if premium
     if (formData.isPremium) {
       if (!formData.customPrice || parseFloat(formData.customPrice) <= 0) {
-        Alert.alert('Error', 'Please enter a valid price for this VIP tip');
+        toast.error('Please enter a valid price for this VIP tip');
         return;
       }
     }
 
     setIsLoading(true);
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch('http://YOUR_API/api/tips', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${userToken}`,
-      //   },
-      //   body: JSON.stringify({
-      //     title: formData.title,
-      //     description: formData.description,
-      //     total_odds: parseFloat(formData.totalOdds),
-      //     is_premium: formData.isPremium,
-      //     custom_price: formData.isPremium ? parseFloat(formData.customPrice) : null,
-      //     booking_codes: validBookingCodes,
-      //     tipster_id: user?.id,
-      //   }),
-      // });
+      await apiCall(API_ENDPOINTS.TIPS, {
+        method: 'POST',
+        token: userToken,
+        body: JSON.stringify({
+          title: formData.title,
+          description: formData.description,
+          total_odds: parseFloat(formData.totalOdds),
+          match_start_time: formData.matchStartTime,
+          is_premium: formData.isPremium,
+          custom_price: formData.isPremium ? parseFloat(formData.customPrice) : null,
+          booking_codes: validBookingCodes.map(bc => ({
+            company: bc.company,
+            code: bc.code,
+            image_url: bc.image?.uri || null,
+          })),
+          tipster_id: user?.id,
+        }),
+      });
 
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      // Add notification for all app users about new tip
       addNotification({
         id: Date.now(),
         title: formData.isPremium ? '🔥 New VIP Tip Available!' : '✅ New Free Tip Posted!',
@@ -3310,33 +3219,36 @@ function PostTipScreen({ navigation }) {
         timestamp: new Date(),
       });
 
-      // TODO: Send push notification to all users via backend
-      // await fetch('http://YOUR_API/api/notifications/broadcast', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     title: formData.isPremium ? 'New VIP Tip!' : 'New Free Tip!',
-      //     body: `${formData.title} - ${formData.totalOdds} odds`,
-      //     type: 'new_tip',
-      //   }),
-      // });
+      try {
+        await apiCall(API_ENDPOINTS.NOTIFICATION_BROADCAST, {
+          method: 'POST',
+          token: userToken,
+          body: JSON.stringify({
+            title: formData.isPremium ? 'New VIP Tip!' : 'New Free Tip!',
+            body: `${formData.title} - ${formData.totalOdds} odds`,
+            type: 'new_tip',
+          }),
+        });
+      } catch (broadcastError) {
+        console.error('Failed to broadcast notification:', broadcastError);
+      }
 
-      Alert.alert(
-        'Success!',
+      toast.success(
         formData.isPremium 
           ? 'Your VIP tip has been posted! Users will be notified.' 
           : 'Your tip has been posted! All users will be notified.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
+        { title: 'Success!' }
       );
+      navigation.goBack();
     } catch (error) {
-      Alert.alert('Error', 'Failed to post tip. Please try again.');
+      toast.error(error.message || 'Failed to post tip. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.tipsterHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -3346,7 +3258,6 @@ function PostTipScreen({ navigation }) {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Tip Info */}
         <Text style={styles.sectionLabel}>TIP INFORMATION</Text>
         
         <Text style={styles.formLabel}>Tip Title *</Text>
@@ -3380,38 +3291,68 @@ function PostTipScreen({ navigation }) {
           onChangeText={(text) => setFormData({...formData, totalOdds: text})}
         />
 
-        {/* Booking Codes Section - Required for all tips */}
+        <Text style={styles.formLabel}>Match Start Time *</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="e.g. 2026-07-07 20:00"
+          placeholderTextColor="#666"
+          value={formData.matchStartTime}
+          onChangeText={(text) => setFormData({...formData, matchStartTime: text})}
+        />
+        <Text style={styles.vipPriceNote}>After this time, the tip locks (no purchases, edits, or deletions)</Text>
+
         <Text style={styles.sectionLabel}>BOOKING CODES *</Text>
         <Text style={styles.bookingCodesHelp}>Add booking codes from betting companies</Text>
         
         {formData.bookingCodes.map((bookingCode, index) => (
-          <View key={index} style={styles.bookingCodeRow}>
-            <View style={styles.bookingCodeCompany}>
-              <TextInput
-                style={[styles.input, styles.bookingCodeInput]}
-                placeholder="Company (e.g. 1xBet)"
-                placeholderTextColor="#666"
-                value={bookingCode.company}
-                onChangeText={(text) => updateBookingCode(index, 'company', text)}
-              />
+          <View key={index} style={styles.bookingCodeCardContainer}>
+            <View style={styles.bookingCodeRow}>
+              <View style={styles.bookingCodeCompany}>
+                <TextInput
+                  style={[styles.input, styles.bookingCodeInput]}
+                  placeholder="Company (e.g. 1xBet)"
+                  placeholderTextColor="#666"
+                  value={bookingCode.company}
+                  onChangeText={(text) => updateBookingCode(index, 'company', text)}
+                />
+              </View>
+              <View style={styles.bookingCodeValue}>
+                <TextInput
+                  style={[styles.input, styles.bookingCodeInput]}
+                  placeholder="Booking Code"
+                  placeholderTextColor="#666"
+                  value={bookingCode.code}
+                  onChangeText={(text) => updateBookingCode(index, 'code', text)}
+                />
+              </View>
+              {formData.bookingCodes.length > 1 && (
+                <TouchableOpacity 
+                  style={styles.removeBookingCodeBtn}
+                  onPress={() => removeBookingCode(index)}
+                >
+                  <Ionicons name="close-circle" size={28} color="#ff4444" />
+                </TouchableOpacity>
+              )}
             </View>
-            <View style={styles.bookingCodeValue}>
-              <TextInput
-                style={[styles.input, styles.bookingCodeInput]}
-                placeholder="Booking Code"
-                placeholderTextColor="#666"
-                value={bookingCode.code}
-                onChangeText={(text) => updateBookingCode(index, 'code', text)}
-              />
-            </View>
-            {formData.bookingCodes.length > 1 && (
-              <TouchableOpacity 
-                style={styles.removeBookingCodeBtn}
-                onPress={() => removeBookingCode(index)}
-              >
-                <Ionicons name="close-circle" size={28} color="#ff4444" />
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={[styles.bookingCodeImageBtn, bookingCode.image?.uploaded && styles.bookingCodeImageBtnSuccess]}
+              onPress={() => handleUploadImage(index)}
+              disabled={uploadingImageIndex === index}
+            >
+              {uploadingImageIndex === index ? (
+                <ActivityIndicator size="small" color="#FFD700" />
+              ) : bookingCode.image?.uploaded ? (
+                <>
+                  <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
+                  <Text style={styles.bookingCodeImageText}>Image uploaded</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="camera" size={18} color="#FFD700" />
+                  <Text style={styles.bookingCodeImageText}>Add image (optional)</Text>
+                </>
+              )}
+            </TouchableOpacity>
           </View>
         ))}
         
@@ -3420,7 +3361,6 @@ function PostTipScreen({ navigation }) {
           <Text style={styles.addBookingCodeText}>Add Another Booking Code</Text>
         </TouchableOpacity>
 
-        {/* Premium Toggle */}
         <View style={styles.premiumContainer}>
           <View style={styles.premiumTextContainer}>
             <Ionicons name="star" size={24} color="#FFD700" />
@@ -3437,7 +3377,6 @@ function PostTipScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* VIP Price Field */}
         {formData.isPremium && (
           <>
             <Text style={styles.sectionLabel}>VIP PRICE</Text>
@@ -3453,7 +3392,6 @@ function PostTipScreen({ navigation }) {
           </>
         )}
 
-        {/* Submit Button */}
         <TouchableOpacity
           style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
           onPress={handleSubmit}
@@ -3471,13 +3409,13 @@ function PostTipScreen({ navigation }) {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
 // Tipster My Tips Screen
 function MyTipsScreen({ navigation }) {
-  const { user } = React.useContext(AuthContext);
+  const { user, userToken } = React.useContext(AuthContext);
   const [tips, setTips] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -3488,78 +3426,48 @@ function MyTipsScreen({ navigation }) {
 
   const loadTips = async () => {
     setIsLoading(true);
-    // TODO: Replace with actual API call
-    // const response = await fetch(`http://YOUR_API/api/my-tips?status=${filter}`, {...});
-    
-    // Mock data with simplified booking code format
-    const mockTips = [
-      {
-        id: 1,
-        title: 'Weekend Mega Jackpot',
-        description: 'Best picks for this weekend',
-        total_odds: '25.5',
-        status: 'pending',
-        is_premium: true,
-        custom_price: 5000,
-        views: 156,
-        created_at: '2026-04-11 10:00:00',
-        booking_codes: [
-          { company: '1xBet', code: 'ABC123XYZ' },
-          { company: 'Betway', code: 'BW789VIP' },
-        ],
-      },
-      {
-        id: 2,
-        title: 'Daily Sure Odds',
-        description: 'Guaranteed win picks',
-        total_odds: '3.5',
-        status: 'won',
-        is_premium: false,
-        views: 234,
-        created_at: '2026-04-10 08:00:00',
-        booking_codes: [
-          { company: 'SportPesa', code: 'SP12345' },
-        ],
-      },
-      {
-        id: 3,
-        title: 'Champions League Special',
-        description: 'UCL midweek matches',
-        total_odds: '12.8',
-        status: 'lost',
-        is_premium: true,
-        custom_price: 3000,
-        views: 189,
-        created_at: '2026-04-09 14:00:00',
-        booking_codes: [
-          { company: 'Betika', code: 'BTKCL2026' },
-          { company: 'Odibets', code: 'ODICLUB' },
-        ],
-      },
-    ];
-    
-    setTimeout(() => {
-      setTips(mockTips);
+    try {
+      const result = await apiCall(`${API_ENDPOINTS.MY_TIPS}?status=${filter}`, {
+        token: userToken,
+      });
+      setTips(result.tips || []);
+    } catch (error) {
+      console.error('Error loading tips:', error);
+      toast.error('Failed to load your tips. Please try again.');
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   const updateTipStatus = async (tipId, newStatus) => {
+    const tip = tips.find(t => t.id === tipId);
+    if (tip && isMatchStarted(tip.match_start_time)) {
+      toast.warning('Match has already started. Cannot update status.');
+      return;
+    }
     try {
-      // TODO: Replace with actual API call
-      // await fetch(`http://YOUR_API/api/tips/${tipId}/result`, {...});
+      await apiCall(API_ENDPOINTS.TIP_STATUS(tipId), {
+        method: 'PATCH',
+        token: userToken,
+        body: JSON.stringify({ status: newStatus }),
+      });
       
       setTips(tips.map(tip => 
         tip.id === tipId ? { ...tip, status: newStatus } : tip
       ));
       
-      Alert.alert('Success', `Tip marked as ${newStatus.toUpperCase()}`);
+      toast.success(`Tip marked as ${newStatus.toUpperCase()}`);
     } catch (error) {
-      Alert.alert('Error', 'Failed to update tip status');
+      toast.error(error.message || 'Failed to update tip status');
     }
   };
 
   const deleteTip = (tipId) => {
+    const tip = tips.find(t => t.id === tipId);
+    if (tip && isMatchStarted(tip.match_start_time)) {
+      toast.warning('Match has already started. Cannot delete this tip.');
+      return;
+    }
     Alert.alert(
       'Delete Tip',
       'Are you sure you want to delete this tip?',
@@ -3568,8 +3476,17 @@ function MyTipsScreen({ navigation }) {
         { 
           text: 'Delete', 
           style: 'destructive',
-          onPress: () => {
-            setTips(tips.filter(tip => tip.id !== tipId));
+          onPress: async () => {
+            try {
+              await apiCall(API_ENDPOINTS.TIP_DETAILS(tipId), {
+                method: 'DELETE',
+                token: userToken,
+              });
+              setTips(tips.filter(tip => tip.id !== tipId));
+              toast.success('Tip deleted successfully');
+            } catch (error) {
+              toast.error(error.message || 'Failed to delete tip');
+            }
           }
         },
       ]
@@ -3614,6 +3531,14 @@ function MyTipsScreen({ navigation }) {
       </View>
       
       <Text style={styles.myTipDate}>Posted: {new Date(tip.created_at).toLocaleDateString()}</Text>
+      {tip.match_start_time && (
+        <View style={styles.myTipMatchTimeRow}>
+          <Ionicons name="time-outline" size={16} color={isMatchStarted(tip.match_start_time) ? '#ff4444' : '#4CAF50'} />
+          <Text style={[styles.myTipMatchTimeText, { color: isMatchStarted(tip.match_start_time) ? '#ff4444' : '#4CAF50' }]}>
+            {isMatchStarted(tip.match_start_time) ? 'Started' : `Starts: ${new Date(tip.match_start_time).toLocaleString()}`}
+          </Text>
+        </View>
+      )}
       
       {/* Price & Booking Codes */}
       <View style={styles.myTipVipInfo}>
@@ -3635,7 +3560,7 @@ function MyTipsScreen({ navigation }) {
                 </View>
                 <Text style={styles.myTipCodeText}>{code.code}</Text>
                 <TouchableOpacity 
-                  onPress={() => Alert.alert('Copied!', `${code.code} copied to clipboard`)}
+              onPress={() => toast.info(`${code.code} copied to clipboard`, { title: 'Copied!' })}
                   style={styles.myTipCopyBtn}
                 >
                   <Ionicons name="copy-outline" size={16} color="#FFD700" />
@@ -3681,7 +3606,7 @@ function MyTipsScreen({ navigation }) {
   );
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.tipsterHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -3725,7 +3650,7 @@ function MyTipsScreen({ navigation }) {
           <View style={{ height: 40 }} />
         </ScrollView>
       )}
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -3743,7 +3668,7 @@ function NotificationsScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.tipsterHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -3785,7 +3710,7 @@ function NotificationsScreen({ navigation }) {
         )}
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -3822,7 +3747,7 @@ function TipsterHomeScreen({ navigation }) {
   ];
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.tipsterHomeHeader}>
@@ -3957,7 +3882,7 @@ function TipsterHomeScreen({ navigation }) {
           </View>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -3986,7 +3911,7 @@ function RecentTipsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.screenContainer}>
+    <SafeScreen>
       <View style={styles.tipsterHeader}>
         <Text style={styles.tipsterHeaderTitle}>Recent Tips</Text>
       </View>
@@ -4028,7 +3953,7 @@ function RecentTipsScreen() {
           ))}
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </SafeScreen>
   );
 }
 
@@ -4161,6 +4086,7 @@ export default function App() {
             ...prevState,
             userToken: action.token,
             userRole: action.role,
+            user: action.user || null,
             isLoading: false,
           };
         case 'SIGN_IN':
@@ -4199,13 +4125,27 @@ export default function App() {
     const bootstrapAsync = async () => {
       let userToken = null;
       let userRole = null;
+      let user = null;
       try {
         userToken = await SecureStore.getItemAsync('userToken');
         userRole = await SecureStore.getItemAsync('userRole');
+        
+        if (userToken) {
+          try {
+            const result = await apiCall(API_ENDPOINTS.USER_PROFILE, { token: userToken });
+            user = result.user;
+          } catch (profileError) {
+            console.log('Failed to fetch user profile, logging out:', profileError.message);
+            userToken = null;
+            userRole = null;
+            await SecureStore.deleteItemAsync('userToken');
+            await SecureStore.deleteItemAsync('userRole');
+          }
+        }
       } catch (e) {
         console.log('Failed to load token');
       }
-      dispatch({ type: 'RESTORE_TOKEN', token: userToken, role: userRole });
+      dispatch({ type: 'RESTORE_TOKEN', token: userToken, role: userRole, user: user });
     };
 
     bootstrapAsync();
@@ -4274,6 +4214,7 @@ export default function App() {
           throw error;
         }
       },
+      setUser: (user) => dispatch({ type: 'SET_USER', user }),
       user: state.user,
       userToken: state.userToken,
       userRole: state.userRole,
@@ -4308,16 +4249,46 @@ export default function App() {
   // Follow state - tracks which tipsters the user is following
   const [followedTipsters, setFollowedTipsters] = React.useState([]);
   
+  useEffect(() => {
+    if (state.userToken) {
+      apiCall(API_ENDPOINTS.MY_FOLLOWING, { token: state.userToken })
+        .then(result => {
+          if (result && result.following) {
+            setFollowedTipsters(result.following);
+          }
+        })
+        .catch(err => console.log('Error loading followed tipsters:', err.message));
+    } else {
+      setFollowedTipsters([]);
+    }
+  }, [state.userToken]);
+
   const followContext = React.useMemo(() => ({
     followedTipsters,
-    toggleFollow: (tipsterId) => {
-      setFollowedTipsters(prev => 
-        prev.includes(tipsterId) 
-          ? prev.filter(id => id !== tipsterId)
-          : [...prev, tipsterId]
-      );
+    toggleFollow: async (tipsterId) => {
+      const isFollowing = followedTipsters.includes(tipsterId);
+      const url = isFollowing 
+        ? API_ENDPOINTS.UNFOLLOW_TIPSTER(tipsterId) 
+        : API_ENDPOINTS.FOLLOW_TIPSTER(tipsterId);
+      
+      try {
+        setFollowedTipsters(prev => 
+          isFollowing ? prev.filter(id => id !== tipsterId) : [...prev, tipsterId]
+        );
+
+        await apiCall(url, {
+          method: 'POST',
+          token: state.userToken,
+        });
+      } catch (error) {
+        console.error('Failed to toggle follow:', error);
+        setFollowedTipsters(prev => 
+          isFollowing ? [...prev, tipsterId] : prev.filter(id => id !== tipsterId)
+        );
+        toast.error(error.message || 'Failed to update follow status');
+      }
     },
-  }), [followedTipsters]);
+  }), [followedTipsters, state.userToken]);
 
   // Early return for loading MUST be after all hooks
   if (state.isLoading) {
@@ -4333,15 +4304,34 @@ export default function App() {
       <NotificationContext.Provider value={notificationContext}>
         <VIPAccessContext.Provider value={vipAccessContext}>
           <FollowContext.Provider value={followContext}>
-            <NavigationContainer>
-              <StatusBar style="light" />
-              <RootNavigator userToken={state.userToken} userRole={state.userRole} />
-            </NavigationContainer>
+            <ToastProvider>
+              <ToastRefSetup />
+              <NavigationContainer>
+                <StatusBar style="light" />
+                <RootNavigator userToken={state.userToken} userRole={state.userRole} />
+              </NavigationContainer>
+            </ToastProvider>
           </FollowContext.Provider>
         </VIPAccessContext.Provider>
       </NotificationContext.Provider>
     </AuthContext.Provider>
   );
+}
+
+// Toast ref setup for global access
+function ToastRefSetup() {
+  const toast = useToast();
+  React.useEffect(() => {
+    setToastRef(toast);
+  }, [toast]);
+  return null;
+}
+
+function isMatchStarted(matchStartTime) {
+  if (!matchStartTime) return false;
+  const matchTime = new Date(matchStartTime);
+  const now = new Date();
+  return now >= matchTime;
 }
 
 const styles = StyleSheet.create({
@@ -5228,7 +5218,17 @@ const styles = StyleSheet.create({
   myTipDate: {
     fontSize: 12,
     color: '#666',
+    marginBottom: 4,
+  },
+  myTipMatchTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 10,
+  },
+  myTipMatchTimeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 6,
   },
   myTipStats: {
     flexDirection: 'row',
@@ -6146,6 +6146,36 @@ const styles = StyleSheet.create({
     marginTop: -5,
     marginBottom: 10,
     marginLeft: 5,
+  },
+  bookingCodeCardContainer: {
+    backgroundColor: '#111',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#222',
+  },
+  bookingCodeImageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    marginTop: 8,
+    borderRadius: 8,
+    backgroundColor: '#000',
+    borderWidth: 1,
+    borderColor: '#333',
+    borderStyle: 'dashed',
+  },
+  bookingCodeImageBtnSuccess: {
+    borderColor: '#4CAF50',
+    backgroundColor: '#4CAF5020',
+    borderStyle: 'solid',
+  },
+  bookingCodeImageText: {
+    color: '#FFD700',
+    fontSize: 13,
+    marginLeft: 6,
   },
   bookingCodeRow: {
     flexDirection: 'row',
@@ -7198,5 +7228,11 @@ const styles = StyleSheet.create({
   deleteCancelBtnText: {
     color: '#888',
     fontSize: 16,
+  },
+  policyContent: {
+    color: '#ccc',
+    fontSize: 14,
+    lineHeight: 22,
+    paddingHorizontal: 5,
   },
 });

@@ -55,9 +55,12 @@ export const API_ENDPOINTS = {
   NOTIFICATIONS: `${API_BASE_URL}/notifications`,
   NOTIFICATION_READ: (id) => `${API_BASE_URL}/notifications/${id}/read`,
   NOTIFICATIONS_READ_ALL: `${API_BASE_URL}/notifications/read-all`,
+  NOTIFICATION_BROADCAST: `${API_BASE_URL}/notifications/broadcast`,
   
   // User
   USER_PROFILE: `${API_BASE_URL}/users/profile`,
+  CHANGE_PASSWORD: `${API_BASE_URL}/users/change-password`,
+  DELETE_ACCOUNT: `${API_BASE_URL}/users/delete`,
   
   // Purchases / Tips History
   PURCHASES: `${API_BASE_URL}/purchases`,
@@ -65,6 +68,12 @@ export const API_ENDPOINTS = {
   CHECK_PURCHASE: (tipId) => `${API_BASE_URL}/purchases/check/${tipId}`,
   FASTLIPA_CREATE_TRANSACTION: `${API_BASE_URL}/payments/fastlipa/create-transaction`,
   FASTLIPA_STATUS: (tranId) => `${API_BASE_URL}/payments/fastlipa/status/${encodeURIComponent(tranId)}`,
+  
+  // Tipster extension
+  MY_TIPS: `${API_BASE_URL}/my-tips`,
+  FOLLOW_TIPSTER: (id) => `${API_BASE_URL}/tipsters/${id}/follow`,
+  UNFOLLOW_TIPSTER: (id) => `${API_BASE_URL}/tipsters/${id}/unfollow`,
+  MY_FOLLOWING: `${API_BASE_URL}/tipsters/my/following`,
 };
 
 const parseJsonSafely = async (response) => {
